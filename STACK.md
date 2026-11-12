@@ -20,8 +20,6 @@ Authored here, under `skills/`. Restore = symlink into `~/.agents/skills/`.
 | `simplify` | cleanup-only review: reuse, simplification, efficiency, altitude |
 | `code-review` | three-axis review: Standards / Spec / Perf. The Perf axis delegates to its `references/perf-systems.md` for a five-axis systems pass (memory, layout, cpu, gpu, io). **Shadows** the `skills` CLI copy from `mattpocock/skills` |
 | `flaky-ci` | CI-vs-local flake diagnosis; bounded local repro, then instrument CI |
-| `pf` | port finder / process manager CLI. **External dependency:** the skill documents the `pf` binary, which is built and installed from `apps/ports` in the dotfiles repo — not vendored here. The skill works with any `pf` on `PATH`. |
-
 ### Shadows
 
 These names also exist in the `skills` CLI manifest. The copy here wins, and
@@ -58,6 +56,18 @@ tool; never commit a copy — the tool rewrites the file on upgrade.
 
 Both stubs say so themselves: `agent-browser` points at `agent-browser skills get core`,
 `rex` at `rex __internal skill`. Backing either up would freeze a stale pointer.
+
+## `parked`
+
+Kept in `skills/` for reference but **not linked** by `install.mjs`. The file stays
+recoverable; nothing loads it.
+
+- `pf` — port finder / process manager CLI. Parked because it was never invoked:
+the user drives the `pf` TUI directly, so there was no port question left for an
+agent to answer. Rescoped around agent-shaped questions ("is this repo already
+serving", "is 5173 free") but parked rather than trusted until something asks.
+Revive by moving it back to `origin: dotfiles`. The binary itself lives in the
+dotfiles repo (`apps/ports`) and is unaffected either way.
 
 ## `excluded`
 

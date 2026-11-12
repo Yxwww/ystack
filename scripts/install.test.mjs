@@ -24,8 +24,12 @@ test("parseManifest reads the real STACK.md", () => {
     "simplify",
     "code-review",
     "flaky-ci",
-    "pf",
   ]);
+
+  // parked: kept on disk for reference but never linked.
+  assert.deepEqual(m.parked, ["pf"]);
+  // A parked skill must not also be linked, or parking does nothing.
+  assert.ok(!m.dotfiles.includes("pf"), "pf must not be both parked and linked");
 
   // cli-installer: generated stubs, never copied.
   assert.deepEqual(m.cliInstaller, ["agent-browser", "rex"]);
@@ -94,7 +98,7 @@ test("link creates one symlink per dotfiles skill, idempotently", () => {
   try {
     s.run("link");
     const linked = readdirSync(s.skills).sort();
-    assert.deepEqual(linked, ["code-review", "flaky-ci", "pf", "pr-catchup", "pre-commit", "pre-push", "ship", "simplify"]);
+    assert.deepEqual(linked, ["code-review", "flaky-ci", "pr-catchup", "pre-commit", "pre-push", "ship", "simplify"]);
     // Second run must not fail on existing links.
     assert.doesNotThrow(() => s.run("link"));
     assert.deepEqual(readdirSync(s.skills).sort(), linked);
@@ -147,13 +151,13 @@ test("doctor flags a link that points outside the stack", () => {
     s.run("link");
     const other = join(s.root, "impostor");
     mkdirSync(other);
-    rmSync(join(s.skills, "pf"), { force: true });
-    symlinkSync(other, join(s.skills, "pf"), "dir");
+    rmSync(join(s.skills, "flaky-ci"), { force: true });
+    symlinkSync(other, join(s.skills, "flaky-ci"), "dir");
     try {
       s.run("doctor");
       assert.fail("doctor should have failed");
     } catch (e) {
-      assert.match(String(e.stderr), /pf: links to .*impostor/);
+      assert.match(String(e.stderr), /flaky-ci: links to .*impostor/);
     }
   } finally {
     s.done();

@@ -49,7 +49,7 @@ const LOCK = join(homedir(), ".agents", ".skill-lock.json");
  * STACK.md must stay readable as documentation and as data.
  */
 export function parseManifest(md) {
-  const out = { dotfiles: [], cliInstaller: [], excluded: [] };
+  const out = { dotfiles: [], parked: [], cliInstaller: [], excluded: [] };
   let section = null;
   for (const line of md.split("\n")) {
     const h = /^##\s+(.*)$/.exec(line);
@@ -60,16 +60,18 @@ export function parseManifest(md) {
         ? "dotfiles"
         : title.startsWith("origin: cli-installer")
           ? "cliInstaller"
-          : title.startsWith("excluded")
-            ? "excluded"
-            : null;
+          : title.startsWith("parked")
+            ? "parked"
+            : title.startsWith("excluded")
+              ? "excluded"
+              : null;
       continue;
     }
     if (!section) continue;
-    if (section === "excluded") {
+    if (section === "excluded" || section === "parked") {
       // Bullets only; skip prose. Names are backticked.
       if (!/^\s*-\s/.test(line)) continue;
-      for (const m of line.matchAll(/`([a-z0-9][a-z0-9-]*)`/g)) out.excluded.push(m[1]);
+      for (const m of line.matchAll(/`([a-z0-9][a-z0-9-]*)`/g)) out[section].push(m[1]);
       continue;
     }
     // Table row: `| `name` | purpose |` — first cell, skip the header/divider.
@@ -172,7 +174,7 @@ function cmdCheck({ quiet = false } = {}) {
     const present = r.kind !== "missing";
     console.log(`  ${present ? C.ok : C.dim}${(present ? "present" : "absent").padEnd(12)}${C.off} ${r.name} ${C.dim}(cli-installer — restored by its own tool)${C.off}`);
   }
-  if (!quiet) console.log(`\n  ${rows.length} dotfiles · ${cli.length} cli-installer · ${m.excluded.length} excluded names`);
+  if (!quiet) console.log(`\n  ${rows.length} dotfiles · ${cli.length} cli-installer · ${m.parked.length} parked · ${m.excluded.length} excluded names`);
   return drift;
 }
 
@@ -250,7 +252,7 @@ function cmdDoctor() {
     else if (r.kind === "foreign-link") problems.push(`${name}: links to ${r.dest}, not the stack`);
   }
   if (problems.length === 0) {
-    console.log(`  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles skills resolve, ${m.excluded.length} excluded`);
+    console.log(`  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles skills resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`);
     return 0;
   }
   for (const p of problems) console.error(`  ${C.bad}drift${C.off} ${p}`);
