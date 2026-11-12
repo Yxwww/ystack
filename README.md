@@ -1,7 +1,7 @@
 # ystack
 
-Domain-agnostic development skills. The counterpart to **pstack** (personal/domain)
-and **gstack** (Mappedin): those are pinned to a product, this one is not.
+Domain-agnostic development skills. Product- and org-specific skills live in
+separate stacks, pinned to a product; this one is not.
 
 **A skill has exactly one origin. ystack never copies what another tool owns.**
 [`STACK.md`](STACK.md) is the machine-readable source of truth — `scripts/install.mjs`
@@ -19,7 +19,7 @@ Clone it anywhere and `./install.sh` works.
 | **dotfiles** | Authored *here*, under `skills/`. | `install.sh` → `install.mjs link` symlinks each into `~/.agents/skills/` |
 | **skills-cli** | Installed by `npx skills add <repo> -g`, tracked in `~/.agents/.skill-lock.json`. **Never copied into this repo.** | `install.mjs skills-cli` re-adds missing ones from the lockfile |
 | **cli-installer** | Generated stubs from a CLI you installed (`agent-browser`, `rex`). | Re-run the tool (`agent-browser skills install`, `rex skill setup`) — never commit a copy, the tool rewrites it on upgrade |
-| **excluded** | Belongs to another stack (pstack / gstack / private Mappedin repo). | Not installed here at all |
+| **excluded** | Belongs to another, domain-specific stack | Not installed here at all |
 
 The rule exists because the alternative is silent data loss. Copying a CLI-managed
 skill freezes a stale version and fights `npx skills update`; symlinking over a real

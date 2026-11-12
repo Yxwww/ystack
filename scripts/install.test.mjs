@@ -38,6 +38,12 @@ test("parseManifest reads the real STACK.md", () => {
   assert.equal(m.excluded.length, 6);
   assert.ok(!m.dotfiles.includes("agent-browser"), "cli-installer must not leak into dotfiles");
   assert.ok(!m.excluded.includes("the"), "only backticked names count as excluded");
+  // This repo is public: the excluded section must not name the private repos,
+  // orgs, or people those skills belong to.
+  const manifestText = execFileSync("cat", [MANIFEST], { encoding: "utf-8" });
+  for (const term of ["mappedin", "mpdin", "rally", "apollo"]) {
+    assert.ok(!new RegExp(`\\b${term}\\b`, "i").test(manifestText), `${term} must not appear in STACK.md`);
+  }
 });
 
 test("parseManifest ignores headings outside the three it knows", () => {

@@ -55,11 +55,11 @@ Each port entry contains:
 | `command`     | `node`                           | Short process name from lsof                |
 | `script`      | `vite`                           | Extracted dev tool name from full command    |
 | `project`     | `security-dashboard-app`         | Extracted from path before node_modules     |
-| `fullCommand` | `node /Users/.../bin/vite --port 5173` | Full argv from ps                    |
-| `cwd`         | `/Users/yuxi/git/my-app`         | Process working directory (from `lsof -d cwd`) — used for "current dir" sort |
+| `fullCommand` | `node ~/proj/node_modules/.bin/vite --port 5173` | Full argv from ps                 |
+| `cwd`         | `~/proj/my-app`                  | Process working directory (from `lsof -d cwd`) — used for "current dir" sort |
 | `address`     | `127.0.0.1` or `*` or `[::1]`   | Bind address                                |
 | `protocol`    | `IPv4` / `IPv6`                  |                                             |
-| `user`        | `yuxi`                           | OS user owning the process                  |
+| `user`        | `alice`                          | OS user owning the process                  |
 
 ## Choosing the right command
 
@@ -76,7 +76,7 @@ Each port entry contains:
 pf find 3000
 # Output:
 # 3000   42156   next   my-app
-#   → node /Users/yuxi/git/my-app/node_modules/.bin/next dev
+#   → node ~/proj/node_modules/.bin/next dev
 ```
 
 **"Kill whatever vite server is running"**

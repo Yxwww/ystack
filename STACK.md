@@ -1,7 +1,7 @@
 # ystack
 
-Domain-agnostic development skills. The counterpart to **pstack** (personal/domain)
-and **gstack** (Mappedin): those are pinned to a product, this one is not.
+Domain-agnostic development skills. Product- and org-specific skills live in
+separate stacks, pinned to a product; this one is not.
 
 **A skill has exactly one origin. ystack never copies what another tool owns.**
 This file is the machine-readable source of truth — `install.mjs` parses it.
@@ -61,17 +61,15 @@ Both stubs say so themselves: `agent-browser` points at `agent-browser skills ge
 
 ## `excluded`
 
-Belongs to another stack. ystack neither installs nor links these:
+Belongs to another stack. ystack neither installs nor links these — they are
+domain-specific and live in separate (private) repos that ystack does not name:
 
-- **pstack / Mappedin** — private repo `Yxwww/mpdin`, cloned at
-  `~/git/mappedin/skills/` (one directory per skill, flattened to the repo root):
-  - `bump-sdk`
-  - `dev-flow`
-  - `review-loop`
-  - `sdk-browser`
-  - `sdk-issue-report`
-- **gstack** — `task-board` (Mappedin Rally MCP wrapper). Also in the private
-  `Yxwww/mpdin` clone at `~/git/mappedin/skills/task-board`.
+- `bump-sdk`
+- `dev-flow`
+- `review-loop`
+- `sdk-browser`
+- `sdk-issue-report`
+- `task-board`
 
 ## Usage
 
