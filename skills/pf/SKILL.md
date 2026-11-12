@@ -1,136 +1,131 @@
 ---
 name: pf
-description: "Port finder and process manager CLI. Use this skill whenever the user mentions port conflicts, wants to see what's listening on a port, needs to kill a dev server, asks 'what's running on port X', wants to free up a port, or is debugging EADDRINUSE / address-already-in-use errors. Also trigger when the user mentions pf directly, or asks about processes occupying ports. Even if they say 'kill port 3000' or 'something is using 5173' without mentioning pf — this skill knows how."
+description: "Answers questions about what is listening on this machine: whether a dev server is already running on this repo, what is on a given port, whether a port is free, and which repo owns a swarm of listeners. Use before starting a dev server, before picking a port, on EADDRINUSE, or when the user asks 'is something already running?', 'what's on 5173?', 'is 3000 free?', 'stop the server I started', or mentions pf directly."
 ---
 
-# pf — port finder & process manager
+# pf — what is listening, and on whose behalf
 
-`pf` is a local CLI tool (aliased in .zshrc) that lists all listening TCP ports on this machine, enriched with the actual dev tool name (vite, next, webpack, etc.), project directory, and the process's **current working directory** — not just the generic `node` process name.
+`pf` reports every listening TCP port on this machine, tagged with the owning
+process, the script it runs, and — via `gitRoot` — which repo it belongs to. It
+is on `PATH` at `~/.local/bin/pf`.
 
-Ports whose process cwd is at or below the shell's current directory are **sorted to the top**, prefixed with `● `, and tagged `← current dir`. The output header includes a `Current dir: <path>` line so the reference path is explicit.
+Answer with a command, not by reading a wall of output. The questions below are
+what an agent is actually asked; run the matching command.
 
-## When to reach for pf
+| Question | Command |
+|---|---|
+| Is this repo already serving something? | `pf json --compact` + the `gitRoot` filter (below) |
+| What is on port 5173? | `pf find 5173` — or the JSON filter for a scriptable answer |
+| Is port 3000 free? | `pf json --compact` + port filter (**not** `pf find`; see the trap) |
+| Which repo owns all these ports? | `pf json --compact` grouped by `gitRoot` |
+| Stop the server I started | `pf kill <port\|pid>` — after confirming it is yours |
+| Open it in the browser | `pf open 5173` |
 
-- User gets `EADDRINUSE` or "address already in use"
-- User asks what's running on a port
-- User wants to kill a stuck dev server
-- User wants a snapshot of all listening ports
-- You need port info programmatically (e.g., to pick a free port or check if a server is up)
+## Is this repo already serving something?
 
-## Commands
-
-### Inspect
-
-```bash
-pf list                  # Plain table, no color — safe to pipe/parse
-pf json                  # Full JSON with all fields (script, project, fullCommand)
-pf json --compact        # Single-line JSON
-pf find <query>          # Search by port number, process name, script, project, or command substring
-pf --snapshot            # Colored table for human reading
-```
-
-### Act
+`gitRoot` is the field that answers this. Do **not** compare `cwd` — for a
+monorepo it is the leaf package (`app-framework`, `sdks/my-sdk`), so it will not
+equal the repo root. Anchor on git's own toplevel so the query works from any
+subdirectory:
 
 ```bash
-pf kill <target>         # Kill by port number, PID, script name, project name, or command substring
-                         # Uses SIGTERM (graceful). Accepts fuzzy match.
-pf open <target>         # Open http://localhost:<port> in the default browser
-                         # Same fuzzy matching as kill. Mirrors the TUI's `o` key.
+pf json --compact | node -e '
+const{execSync}=require("child_process");let s="";
+process.stdin.on("data",d=>s+=d).on("end",()=>{
+  let root;try{root=execSync("git rev-parse --show-toplevel",
+    {encoding:"utf8",stdio:["ignore","pipe","ignore"]}).trim()}
+  catch{return console.log("not a git repo")}
+  const hit=JSON.parse(s).filter(p=>p.gitRoot &&
+    (p.gitRoot===root||p.gitRoot.startsWith(root+"/")));
+  if(!hit.length)return console.log("nothing serving under "+root);
+  for(const p of hit)console.log(p.port+"\t"+p.script+"\tpid "+p.pid);
+})'
 ```
 
-### Interactive
+The prefix match matters: in a monorepo `gitRoot` can be a *nested* root
+(`.../pr-222/sdk`), so an equality test alone reports "nothing" while three
+servers are up.
+
+## What is on port N, and is N free?
 
 ```bash
-pf                       # Full-screen TUI — j/k nav, d kill, s start (pnpm dev/start in cwd), o open, r refresh, q quit
+pf json --compact | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const p=Number(process.argv[1]),hit=JSON.parse(s).filter(r=>r.port===p);
+  if(!hit.length)return console.log(p+" free");
+  for(const h of hit)console.log(p+" IN USE pid "+h.pid+" "+h.script+" addr "+h.address);
+})' 5173
 ```
 
-## Output fields
+**Trap: `pf find` is not a port-in-use test.** A single token happens to work,
+but `pf find 3000 || echo free` is the wrong habit, because:
 
-Each port entry contains:
+- `pf find` with **no query at all** exits **`1`** (bare usage error), and
+- only the **first** positional argument is read — extra words are silently
+  ignored, so `pf find 3000 free` is exactly `pf find 3000`; it does *not*
+narrow the search.
 
-| Field         | Example                          | Notes                                      |
-|---------------|----------------------------------|---------------------------------------------|
-| `port`        | `5173`                           | The listening TCP port                      |
-| `pid`         | `88252`                          | OS process ID                               |
-| `command`     | `node`                           | Short process name from lsof                |
-| `script`      | `vite`                           | Extracted dev tool name from full command    |
-| `project`     | `security-dashboard-app`         | Extracted from path before node_modules     |
-| `fullCommand` | `node ~/proj/node_modules/.bin/vite --port 5173` | Full argv from ps                 |
-| `cwd`         | `~/proj/my-app`                  | Process working directory (from `lsof -d cwd`) — used for "current dir" sort |
-| `address`     | `127.0.0.1` or `*` or `[::1]`   | Bind address                                |
-| `protocol`    | `IPv4` / `IPv6`                  |                                             |
-| `user`        | `alice`                          | OS user owning the process                  |
+Decide from the JSON port filter above, not from an exit code.
 
-## Choosing the right command
+`pf find <query>` is still the right tool for a human-readable lookup by port,
+name, project, or command — just read its output, don't branch on its status.
 
-- **Need to read the output yourself or show the user?** Use `pf list` or `pf --snapshot`.
-- **Need structured data to act on programmatically?** Use `pf json` and parse it.
-- **User asked about a specific port/process?** Use `pf find <query>` first to confirm, then `pf kill` if needed.
-- **User just says "kill port 3000"?** Go straight to `pf kill 3000`.
-- **User wants to browse everything interactively?** Suggest `pf` (the TUI) — but note this is interactive and blocks the terminal, so don't run it from a script or subagent.
+## Reading `address`
 
-## Examples
+| `address` | Meaning |
+|---|---|
+| `*` or `0.0.0.0` | bound to all interfaces — reachable from the network, and the one that actually causes `EADDRINUSE` |
+| `127.0.0.1` / `[::1]` | loopback only — safe for local dev, invisible to the network |
 
-**"Something is using port 3000"**
-```bash
-pf find 3000
-# Output:
-# 3000   42156   next   my-app
-#   → node ~/proj/node_modules/.bin/next dev
-```
+A port can be busy on loopback and free on all interfaces, and `pf` lists those
+as separate rows. Check the `address` before declaring a port taken.
 
-**"Kill whatever vite server is running"**
-```bash
-pf kill vite
-# Output:
-# killed 88252 (vite) on port 5173
-```
-
-**"What dev servers do I have running?"**
-```bash
-pf list
-```
-
-**"Free up port 8080 for me"**
-```bash
-pf kill 8080
-```
-
-**Check programmatically if a port is in use:**
-```bash
-pf json --compact | jq '.[] | select(.port == 3000)'
-```
-
-**"What port is this project serving?"** (answer: whichever ports are marked `← current dir`)
-```bash
-pf list
-# Current dir: ~/git/my-app
-#   PORT    PID     SCRIPT          PROJECT               ADDRESS
-# ● 5173    88252   vite            my-app                [::1]  ← current dir
-#   3000    12345   next            other-app             *
-```
-
-Or programmatically, filter by cwd prefix:
-```bash
-pf json --compact | jq --arg cwd "$PWD" '[.[] | select(.cwd | startswith($cwd))]'
-```
-
-## Parsing the output (LLM / script tips)
-
-Every cwd-match row in `pf list` and `pf --snapshot` is both **prefixed** with `● ` and **suffixed** with `← current dir`. Either signal is stable; grep on the suffix for line-oriented parsing:
+## Killing safely
 
 ```bash
-pf list | grep '← current dir'          # only cwd-owned ports
-pf list | grep -v '← current dir' | tail -n +3   # skip cwd-owned, skip headers
+pf kill 5173        # by port
+pf kill <pid>       # by pid
 ```
 
-The first line of `pf list` / `pf --snapshot` is always `Current dir: <path>` — read it to know the reference cwd without inferring.
+Both print `killed <pid> (<name>) on port <n>`. Prefer killing by port.
 
-For structured work, `pf json` is the source of truth: every entry has a `cwd` field, and you can match against `$PWD` yourself (the JSON output is **not** sorted by cwd — it's stable port order, so scripts that cared about ordering before still work).
+**Confirm before killing.** A listener on the port you want is often another
+repo's dev server, a colleague's workspace, or something the user is actively
+using. The user said "free up 4447", not "kill whatever is on 4447" — if
+`gitRoot` belongs to a different repo than the one you are working in, say so
+and ask first. Killing it silently destroys state they cannot recover.
 
-- `pf kill` uses SIGTERM (signal 15), not SIGKILL — processes get a chance to clean up. If a process doesn't die, the user may need `kill -9 <pid>` manually.
-- Some system ports require `sudo` to see or kill. If `pf list` shows fewer ports than expected, suggest `sudo pf list`.
-- The `script` field is extracted heuristically from the full command — it catches most Node.js dev servers (vite, next, nuxt, webpack, esbuild, etc.) but may be empty for non-standard setups.
-- The `cwd` field comes from `lsof -d cwd` against the listening process. If lsof can't read it (permissions, zombie process), the field is empty and the row won't match "current dir" — not a bug, just a gap.
-- "Current dir" matching is a path-prefix check (`process.cwd()` or below). Being in the repo root marks every dev server under it; being in a deep subdir narrows the match.
-- Don't launch `pf` (the TUI) in non-interactive contexts. Use `pf list`, `pf json`, or `pf find` instead.
+## Reference
+
+```text
+pf                Interactive TUI (j/k move, d kill, r refresh, q quit)
+pf list           Plain table, pipe-friendly
+pf json           JSON array (--compact for one line)
+pf find <query>   Search by port, name, project, or command
+pf kill <target>  Kill by port, pid, name, or project
+pf open <target>  Open http://localhost:<port>
+pf --snapshot     Colored snapshot of the table
+```
+
+One JSON record per listener:
+
+| Field | Example | Notes |
+|---|---|---|
+| `port` | `5173` | the listening port |
+| `pid` | `80689` | process id |
+| `command` | `node` | process name only |
+| `fullCommand` | `node ~/proj/node_modules/.bin/vite dev` | full argv |
+| `script` | `../vite/bin/vite.js` | script path as run |
+| `project` | `my-app` | package name; empty string `""` when unknown (`—` is text-output only) |
+| `user` | `alice` | OS user owning the process |
+| `address` | `*` / `[::1]` | see the table above |
+| `protocol` | `IPv4` / `IPv6` | |
+| `fd` | `14u` | file descriptor |
+| `cwd` | `~/proj/my-app/app` | process working directory |
+| `gitRoot` | `~/proj/my-app` | nearest enclosing git root — **use this for "which repo"** |
+
+Exit codes: `find` and `kill` return `1` on no match, and `kill` also returns `1`
+when called with no argument (after printing its usage). So `pf kill` failing is
+indistinguishable from `pf kill` being misused — read the output, not just the
+status. Note that piping these (`pf find x | head`) reports `head`'s exit code,
+not `pf`'s, which makes a missing match look like a success.
