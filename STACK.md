@@ -20,7 +20,7 @@ Authored here, under `skills/`. Restore = symlink into `~/.agents/skills/`.
 | `simplify` | cleanup-only review: reuse, simplification, efficiency, altitude |
 | `code-review` | three-axis review: Standards / Spec / Perf. The Perf axis delegates to its `references/perf-systems.md` for a five-axis systems pass (memory, layout, cpu, gpu, io). **Shadows** the `skills` CLI copy from `mattpocock/skills` |
 | `flaky-ci` | CI-vs-local flake diagnosis; bounded local repro, then instrument CI |
-| `pf` | port finder / process manager CLI |
+| `pf` | port finder / process manager CLI. **External dependency:** the skill documents the `pf` binary, which is built and installed from `apps/ports` in the dotfiles repo — not vendored here. The skill works with any `pf` on `PATH`. |
 
 ### Shadows
 
