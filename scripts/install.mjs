@@ -156,10 +156,46 @@ const C = process.stdout.isTTY
   ? { ok: "\x1b[32m", warn: "\x1b[33m", bad: "\x1b[31m", dim: "\x1b[2m", off: "\x1b[0m" }
   : { ok: "", warn: "", bad: "", dim: "", off: "" };
 
+/**
+ * Resolve a tool-owned (cli-installer) skill. Unlike `inspect`, the target is NOT
+ * expected to be `skills/<name>` — it lives in the tool's own cache.
+ *
+ * Returns kind:
+ *   ok        — a directory or a symlink resolving to a real skill dir
+ *   dangling  — the link exists but its target is gone (tool moved its cache)
+ *   absent    — nothing at the path; the tool was never run here
+ *
+ * The dangling case is why this exists: doctor must fail on it, because a dangling
+ * link is indistinguishable from a missing skill at load time, yet `existsSync` on
+ * a directory that merely *contains* such links says everything is fine.
+ */
+export function inspectOwned(name, dir = skillsDir()) {
+  const link = join(dir, name);
+  let st;
+  try {
+    st = lstatSync(link);
+  } catch {
+    return { name, link, kind: "absent" };
+  }
+  // Follows the link. A missing target throws or yields false.
+  const target = st.isSymbolicLink() ? readlinkSync(link) : null;
+  const resolved = existsSync(link);
+  if (!resolved) return { name, link, kind: "dangling", target };
+  const hasSkill = existsSync(join(resolvedPath(link), "SKILL.md"));
+  return { name, link, kind: hasSkill ? "ok" : "no-skill-md", target, resolved: resolvedPath(link) };
+}
+
+function resolvedPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(dirname(p), "");
+  }
+}
+
 function cmdCheck({ quiet = false } = {}) {
   const m = readManifest();
   const rows = m.dotfiles.map(inspect);
-  const cli = m.cliInstaller.map(inspect);
   let drift = 0;
   if (!quiet) console.log(`ystack @ ${ROOT}\n`);
   for (const r of rows) {
@@ -169,12 +205,19 @@ function cmdCheck({ quiet = false } = {}) {
     const col = r.kind === "ok" ? C.ok : C.warn;
     console.log(`  ${col}${r.kind.padEnd(12)}${C.off} ${r.name}${bad ? `  ${C.dim}${r.link}${C.off}` : ""}`);
   }
-  for (const r of cli) {
-    if (quiet) continue;
-    const present = r.kind !== "missing";
-    console.log(`  ${present ? C.ok : C.dim}${(present ? "present" : "absent").padEnd(12)}${C.off} ${r.name} ${C.dim}(cli-installer — restored by its own tool)${C.off}`);
+  for (const name of m.cliInstaller) {
+    const r = inspectOwned(name);
+    if (quiet && r.kind === "ok") continue;
+    const present = r.kind !== "absent";
+    const col = r.kind === "ok" || r.kind === "absent" ? (present ? C.ok : C.dim) : C.bad;
+    const label = r.kind === "absent" ? "absent" : r.kind;
+    // A declared skill that is absent is drift too, same as an unlinked one.
+    if (r.kind !== "ok") drift++;
+    console.log(
+      `  ${col}${label.padEnd(12)}${C.off} ${name} ${C.dim}(cli-installer — restored by its own tool)${C.off}`,
+    );
   }
-  if (!quiet) console.log(`\n  ${rows.length} dotfiles · ${cli.length} cli-installer · ${m.parked.length} parked · ${m.excluded.length} excluded names`);
+  if (!quiet) console.log(`\n  ${rows.length} dotfiles · ${m.cliInstaller.length} cli-installer · ${m.parked.length} parked · ${m.excluded.length} excluded names`);
   return drift;
 }
 
@@ -251,8 +294,19 @@ function cmdDoctor() {
     else if (r.kind === "missing") problems.push(`${name}: not linked (run: install.mjs link)`);
     else if (r.kind === "foreign-link") problems.push(`${name}: links to ${r.dest}, not the stack`);
   }
+  // cli-installer skills are tool-owned, so ystack cannot restore them itself —
+  // it only reports. A dangling link is loud because it fails silently at load.
+  for (const name of m.cliInstaller) {
+    const r = inspectOwned(name);
+    if (r.kind === "ok") continue;
+    if (r.kind === "dangling") problems.push(`${name}: dangling link -> ${r.target} (the tool moved its cache; re-run its regenerate step)`);
+    else if (r.kind === "no-skill-md") problems.push(`${name}: ${r.resolved} has no SKILL.md`);
+    else if (r.kind === "absent") problems.push(`${name}: not installed (declared in STACK.md; see its Install step)`);
+  }
   if (problems.length === 0) {
-    console.log(`  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles skills resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`);
+    console.log(
+      `  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles + ${m.cliInstaller.length} cli-installer skills resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`,
+    );
     return 0;
   }
   for (const p of problems) console.error(`  ${C.bad}drift${C.off} ${p}`);

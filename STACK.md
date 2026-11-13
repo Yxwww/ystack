@@ -49,13 +49,23 @@ that list.
 Skills that are **generated stubs** from a CLI you installed. Restore = re-run the
 tool; never commit a copy — the tool rewrites the file on upgrade.
 
+`doctor` verifies these resolve too. A cli-installer skill is often a **symlink into
+the tool's own cache**, so its target moves when the tool upgrades — that failure is
+silent otherwise (the link dangles and the skill just stops loading).
+
 | Skill | Install | Regenerate skill |
 |---|---|---|
 | `agent-browser` | `brew install agent-browser` | `agent-browser skills install` |
 | `rex` | Rex app (`com.superlogical.rex`) | `rex skill setup` |
+| `skill-creator` | Claude Code plugin: `claude plugin install skill-creator@claude-plugins-official` | `ln -snf ~/.claude/plugins/cache/claude-plugins-official/skill-creator/*/skills/skill-creator ~/.agents/skills/skill-creator` |
 
-Both stubs say so themselves: `agent-browser` points at `agent-browser skills get core`,
-`rex` at `rex __internal skill`. Backing either up would freeze a stale pointer.
+All three stubs say so themselves: `agent-browser` points at `agent-browser skills get core`,
+`rex` at `rex __internal skill`. Backing any of them up would freeze a stale pointer.
+
+`skill-creator` is the odd one: the plugin delivers the skill to Claude Code, but not to
+`~/.agents/skills/`, so the symlink is what makes it loadable elsewhere. Its cache path
+carries a version segment that changes on plugin upgrade — hence the `*` in the regenerate
+command, and hence the dangling-link check in `doctor`.
 
 ## `parked`
 

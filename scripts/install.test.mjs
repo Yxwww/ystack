@@ -32,7 +32,7 @@ test("parseManifest reads the real STACK.md", () => {
   assert.ok(!m.dotfiles.includes("pf"), "pf must not be both parked and linked");
 
   // cli-installer: generated stubs, never copied.
-  assert.deepEqual(m.cliInstaller, ["agent-browser", "rex"]);
+  assert.deepEqual(m.cliInstaller, ["agent-browser", "rex", "skill-creator"]);
 
   // excluded: domain-stack skills, and no prose leaks in (e.g. words outside backticks).
   for (const n of ["bump-sdk", "dev-flow", "review-loop", "sdk-browser", "sdk-issue-report", "task-board"]) {
@@ -84,13 +84,24 @@ function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "ystack-test-"));
   const skills = join(root, "skills");
   mkdirSync(skills, { recursive: true });
+  // cli-installer skills are tool-owned and absent from a fresh sandbox, but
+  // doctor checks them. Seed stand-ins so the drift under test is the one the
+  // test is about, not "you never installed the tools".
+  const seedOwned = () => {
+    for (const name of ["agent-browser", "rex", "skill-creator"]) {
+      const src = join(root, "owned", name);
+      mkdirSync(src, { recursive: true });
+      writeFileSync(join(src, "SKILL.md"), name);
+      symlinkSync(src, join(skills, name), "dir");
+    }
+  };
   const run = (cmd) =>
     execFileSync("node", [join(import.meta.dirname, "install.mjs"), cmd], {
       env: { ...process.env, AGENT_SKILLS_DIR: skills },
       encoding: "utf-8",
       stdio: "pipe",
     });
-  return { root, skills, run, done: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, skills, run, seedOwned, done: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("link creates one symlink per dotfiles skill, idempotently", () => {
@@ -126,7 +137,48 @@ test("doctor reports drift and passes when clean", () => {
   try {
     assert.throws(() => s.run("doctor"), /Command failed/);
     s.run("link");
+    s.seedOwned();
     assert.doesNotThrow(() => s.run("doctor"));
+  } finally {
+    s.done();
+  }
+});
+
+// The reason cli-installer skills are checked at all: their target lives in a
+// tool's own cache, which moves on upgrade. `existsSync(skillsDir) === true` and
+// the skill silently stops loading — doctor must be the thing that notices.
+test("doctor flags a dangling cli-installer link", () => {
+  const s = sandbox();
+  try {
+    s.run("link");
+    s.seedOwned();
+    assert.doesNotThrow(() => s.run("doctor"));
+
+    // Plugin upgrade moves the cache dir out from under the link.
+    rmSync(join(s.root, "owned", "skill-creator"), { recursive: true, force: true });
+    try {
+      s.run("doctor");
+      assert.fail("doctor should have failed on a dangling link");
+    } catch (e) {
+      assert.match(String(e.stderr), /skill-creator: dangling link/);
+    }
+  } finally {
+    s.done();
+  }
+});
+
+test("doctor flags an absent cli-installer skill", () => {
+  const s = sandbox();
+  try {
+    s.run("link");
+    s.seedOwned();
+    rmSync(join(s.skills, "rex"), { force: true });
+    try {
+      s.run("doctor");
+      assert.fail("doctor should have failed");
+    } catch (e) {
+      assert.match(String(e.stderr), /rex: not installed/);
+    }
   } finally {
     s.done();
   }
@@ -139,6 +191,7 @@ test("link repairs a stale symlink left by a previous layout", () => {
     mkdirSync(join(s.root, "old", "pf"), { recursive: true });
     symlinkSync(join(s.root, "old", "pf"), join(s.skills, "pf"), "dir");
     s.run("link");
+    s.seedOwned();
     assert.doesNotThrow(() => s.run("doctor"));
   } finally {
     s.done();
