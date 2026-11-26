@@ -1,0 +1,55 @@
+{
+  "skill_name": "placement-review",
+  "evals": [
+    {
+      "id": 1,
+      "name": "plan-memory-column",
+      "prompt": "Here's my plan for adding a memory column to pf (apps/ports in my dotfiles). Review it and fix it up before I start implementing: {OUT}/plan.md",
+      "expected_output": "Plan rewritten: RSS read folded into enrichEntries' existing ps call, column rendered via formatPortRow, e2e test demoted to unit tests in existing files.",
+      "files": [
+        "evals/files/plan-memory-column.md"
+      ],
+      "expectations": [
+        "Folds the RSS read into the existing ps call in enrichEntries (ports.ts) instead of a second ps pass",
+        "Routes MEM rendering through formatPortRow (format.ts) or otherwise names the shared row formatter as the home",
+        "Replaces or cuts down the e2e test, moving the details to unit tests",
+        "Adds formatBytes and parsing tests to an existing test file (format.test.ts or ports.test.ts), not a new memory.test.ts",
+        "Every placement finding cites a concrete file:line",
+        "outputs/plan.md was rewritten to reflect the changes"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "plan-class-counts",
+      "prompt": "Can you sanity-check this plan for pf (apps/ports) and tighten it up? {OUT}/plan.md",
+      "expected_output": "Class counting folded into snapshot's existing per-entry loop and the TUI's cwdCount pass; stats.ts questioned; three tests merged.",
+      "files": [
+        "evals/files/plan-class-counts.md"
+      ],
+      "expectations": [
+        "Folds snapshot class counting into the existing per-entry loop in snapshot.ts that already calls classifyProcess",
+        "Computes the TUI class counts in the same pass as cwdCount in refresh() (one pass, not filter + countByClass)",
+        "Questions or removes the new stats.ts file as a standalone home",
+        "Collapses the three stats tests into fewer tests or folds them into an existing test file",
+        "Every placement finding cites a concrete file:line",
+        "outputs/plan.md was rewritten to reflect the changes"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "review-user-filter-diff",
+      "prompt": "Review the add-user-filter branch in skills/placement-review-workspace/fixtures/ports-repo against main.",
+      "expected_output": "Report only: isUserProcess duplicates classifyProcess, e2e test demoted to unit, index.ts flag handling kept.",
+      "files": [],
+      "expectations": [
+        "Flags isUserProcess as duplicating classifyProcess (ports.ts) and recommends reusing it",
+        "Notes the duplicated system-name list drifts from SYSTEM_COMMANDS (missing entries)",
+        "Flags list.e2e.test.ts as machine-dependent and recommends a unit test instead",
+        "Recommends combining the four isUserProcess tests (or folding them into an existing test)",
+        "Keeps the --user flag handling in index.ts and does not invent a finding against it",
+        "Every placement finding cites a concrete file:line",
+        "Does not modify the fixture repo (report only)"
+      ]
+    }
+  ]
+}

@@ -1,15 +1,18 @@
 ---
 name: code-review
-description: "Three-axis code review of the changes since a fixed point: Standards (does the code follow this repo's documented conventions?), Spec (does it implement what was asked?), and optionally Perf (does it cost what it should on the hot path?). Axes run as parallel sub-agents with independent context and are reported separately. Use when reviewing a branch, a PR, or work-in-progress, or when asked to \"review since X\"."
+description: "Multi-axis code review of the changes since a fixed point: Standards (does the code follow this repo's documented conventions?), Spec (does it implement what was asked?), Perf (does it cost what it should on the hot path?), and Placement (does each new unit belong where it was put?). Axes run as parallel sub-agents with independent context, each writing its own report file, and are reported separately. Use when reviewing a branch, a PR, or work-in-progress, or when asked to \"review since X\"."
 ---
 
-Three-axis review of the diff between a fixed point and `HEAD`:
+Multi-axis review of the diff between a fixed point and `HEAD`:
 
 - **Standards** — does the code follow this repo's documented conventions?
 - **Spec** — does it implement what the originating issue or task asked for?
 - **Perf** — does it cost what it should, on the paths that actually run often?
+- **Placement** — does each new unit belong in the home it was given?
 
 Each axis runs as a **sub-agent with a fresh context window** so one axis cannot anchor another, and so a Standards pass can't mask a Spec failure. This skill routes and aggregates; it does not review inline.
+
+**Every run leaves a record on disk.** Each axis writes its own file under `<run>/axes/` and the coordinator writes `<run>/README.md` — see [§3](#3-decide-where-the-record-goes). The chat answer is a summary of the record, never a substitute for it: a review that exists only in the transcript is gone when the session ends, and a coordinator retyping findings is producing a transcription, not evidence.
 
 The order below is the process. Do not skip ahead to findings.
 
@@ -40,17 +43,43 @@ Watch *file* size as well as diff size. A small diff that pushes a file past ~10
 
 **Standards source**: every file in the repo that documents how code should be written. `CODING_STANDARDS.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, and any style doc must all be on the list if present.
 
-## 3. Spawn the axes in parallel
+## 3. Decide where the record goes
+
+A review that exists only in the transcript is lost the moment the session ends, and a coordinator that retypes findings into a file produces a *transcription* rather than a record. So every run leaves files on disk, **written as it proceeds** — not reconstructed afterwards from what is still in context.
+
+| Situation | `<root>` |
+|---|---|
+| Reviewing a pull request | `<repo>/pr-review/<number>/` |
+| Reviewing a branch with no PR | `<repo>/pr-review/<branch-slug>/` |
+| Reviewing local work before any branch exists | `.scratch/review-<date>/` |
+
+**One directory per run, never over the last one.** A PR gets reviewed repeatedly — new push, force-push, a second opinion a month later — and a record that overwrites itself is a record of the most recent opinion only. Write to `<root>/runs/<yyyy-mm-dd>-<hhmm>-<head7>/`, where `<head7>` is the short SHA you reviewed. `<root>/README.md` is the current state and the only file a later run may rewrite; everything under `runs/` is immutable, including findings you now disagree with — write a new run that says so instead of editing the old one.
+
+Put it under the **repo being reviewed**, not the reviewer's workspace: the record is about that code and must survive the workspace being torn down. `pr-review/<number>/` is keyed by PR number because that is the stable identity — a branch can be renamed and a head SHA moves on every push.
+
+Resolve the run directory **once**, to an absolute path, and pass it to every axis. Resolving it per-axis is how you get three axes writing to three directories.
+
+Add the directory to `.gitignore` only if the repo already ignores review notes; otherwise leave it untracked and let the author decide. Never commit a review to the reviewed branch.
+
+## 4. Spawn the axes in parallel
 
 Issue all sub-agent calls together, in the foreground, and aggregate what comes back. Paste each axis's material into its brief — a sub-agent has no other access to it.
+
+**Each axis writes its own file**, so a finding cannot be softened or dropped in transit. Put this line in every brief:
+
+> Write your report to `<run>/axes/<axis>.md` before you finish. It is the record; your returned summary may be shorter. Do not write anywhere else.
+
+An axis is therefore read-only **except** its own report file. Say so explicitly, because "do not modify any file" and "write your report" otherwise read as a contradiction and the agent skips the write:
+
+> Read-only: do not modify the code under review. Your report file is the one permitted write.
+
+If an axis could not run (no spec, all cold paths), it still writes its file saying which and why. An absent file is indistinguishable from a crash.
 
 ### Standards
 
 Brief includes the diff command, commit list, the standards files, and [the smell baseline](#the-smell-baseline) pasted in full.
 
 > Report, per file/hunk, (a) every place the diff violates a documented standard — cite the file and rule; (b) any baseline smell — name it and quote the hunk. Documented breaches may be hard violations; baseline smells are always judgement calls. A documented repo standard always overrides the baseline. Skip anything tooling enforces. Under 400 words.
-
-Also ask this axis to **check the tests by experiment, not by reading**: invert one condition the change adds (drop a negation, swap `&&` for `||`), run the suite, restore the file from a copy. A mutation that stays green is a finding — name the missing test case. A green suite that survives a deliberate break is evidence of nothing.
 
 ### Spec
 
@@ -59,6 +88,15 @@ Brief includes the diff command, commit list, and the spec text or path.
 > Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each. Under 400 words.
 
 No spec → skip this axis and say so. Do not manufacture requirements.
+
+### Mutation — give it to an axis, not to prose
+
+A green suite is evidence of nothing until a deliberate break makes it red. **Mutation is a step in an axis brief, not a paragraph in this skill**, because a step the reader has to interpret is a step that gets skipped. Give it to the axis whose findings it can overturn:
+
+- **Standards**, when the change's tests are in question: **check the tests by experiment, not by reading.** Invert one condition the change adds (drop a negation, swap `&&` for `||`), run the suite, restore the file from a copy. A mutation that stays green is a finding — name the missing test case. A green suite that survives a deliberate break is evidence of nothing.
+- **Spec**, when a claimed behaviour has no test reaching it: delete or invert the call site the claim depends on and re-run. Report the number of tests that stayed green; if it is the whole suite, say so in those words.
+
+Every mutation restores the file from a copy before moving on, and the report says which mutations were tried and what each result was. A mutation that stayed green because the code is *unreachable* is a different finding from one that stayed green because no test covers it — say which, and prove it (an unreachable branch can be shown with a one-line script; an untested one cannot).
 
 ### Perf
 
@@ -70,9 +108,13 @@ Three rules govern it:
 2. **All cold → skip the axis and say so.** That is the most common correct answer, not a failure to review.
 3. **Every finding names the path** it runs on and carries a measurement status: `measured` | `estimated` | `unverified`. If you cannot name the per-frame path, it is not a finding. Every finding also cites the cost-model rule it invokes — no rule, no finding.
 
-## 4. Aggregate
+### Placement
 
-Report under `## Standards`, `## Spec`, `## Perf` — separate, lightly cleaned, **not merged and not reranked across axes**. Keeping them apart is the point: clean Standards must not bury a Spec failure.
+Brief: "Run the `placement-review` skill (`~/.agents/skills/placement-review/SKILL.md`) in review mode against `<fixed-point>`. You are the reviewer; do not spawn another." It asks whether each new unit, test included, belongs in an existing home — a loop to fold into, a better layer, an existing test to extend. Read-only apart from its own report file.
+
+## 5. Aggregate
+
+Report under `## Standards`, `## Spec`, `## Perf`, `## Placement` — separate, lightly cleaned for grammar only, **not merged and not reranked across axes**. Keeping them apart is the point: clean Standards must not bury a Spec failure. The *chat* columns may be condensed; the axis files under `<run>` stay verbatim (see [Write the index](#write-the-index)).
 
 Within each axis, order by leverage. Label every finding:
 
@@ -87,6 +129,12 @@ Within each axis, order by leverage. Label every finding:
 Before reporting, check each finding against callers, guards, and tests that reach the changed code — drop it if they rule it out. Label pre-existing defects separately from regressions this change introduces. **Zero findings is a valid result; do not invent one.**
 
 End with one line per axis: count, and the worst issue *within* that axis.
+
+### Write the index
+
+Only after aggregating, write `<run>/README.md`: the verdict, one line per axis with its count and worst finding, and a link to each file. It is the entry point, not a second copy — if a finding appears in both the index and an axis file, they will disagree eventually. Then refresh `<root>/README.md` so it names this run as the latest and lists the earlier ones; that top-level file is the history.
+
+Keep the axis files exactly as the sub-agents wrote them. Do not "clean them up" in place: an axis report with the coordinator's edits is no longer evidence of what that axis found. Where you **disagree** with a finding, say so in the index and leave the axis file alone — a rejected finding is information, and the record is more useful for showing the disagreement than for erasing it.
 
 ### Structural remedies
 
@@ -128,6 +176,25 @@ When resolving a dispute: technical facts override opinion, style guides own sty
 
 ## Report
 
+Two outputs, and they are not the same document. The files under `<run>` are the durable record; the chat answer is the short answer to "can I land this".
+
+**Files** (written as the review proceeds, not afterwards):
+
+```
+<root>/
+├── README.md          current state: latest run + one line per earlier run
+└── runs/<stamp>/
+    ├── README.md      this run's index
+    ├── axes/
+    │   ├── standards.md   each axis, verbatim, written by its own sub-agent
+    │   ├── spec.md        never retyped by the coordinator
+    │   ├── perf.md
+    │   └── placement.md
+    └── evidence/      frames, logs, traces a claim depends on  (optional)
+```
+
+**Chat**, in this shape:
+
 ```markdown
 ## Review: <change> since <fixed-point>
 
@@ -139,6 +206,9 @@ When resolving a dispute: technical facts override opinion, style guides own sty
 
 ## Perf
 <findings, or "all changed paths are cold — skipped">
+
+## Placement
+<placement-review table, or "every new unit has a justified home">
 
 ## Checklist
 - [ ] Change matches the spec

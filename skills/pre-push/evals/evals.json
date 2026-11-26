@@ -35,6 +35,30 @@
         "Stops rather than creating a PR unprompted",
         "Reports the PR URL / next step to the user"
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "I pushed. The PR body is 14k chars: it has the right headings but includes a per-file inventory, two mutation-gate tables, a file-deletion line-count diff, and two separate Evidence blocks. Trim it.",
+      "expected_output": "Agent keeps the template sections but cuts diff-level detail down to the overview, targeting a few thousand chars.",
+      "files": [],
+      "expectations": [
+        "Keeps ## Summary, ## Evidence, ## Merge Danger in order rather than deleting sections",
+        "Cuts per-file inventories, mutation/gate tables, and line-count diff sketches",
+        "Collapses the duplicated Evidence blocks into one",
+        "Points at the design artifact by path instead of inlining its reasoning",
+        "Retains the reason behind any counter-intuitive rule and the consumer-facing breakage",
+        "Checks the resulting size (target ~2-4k chars)"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Pushed — the PR body is short and follows the template. Nothing structural changed, just another commit.",
+      "expected_output": "Agent recognises the body already meets the standard and leaves it alone rather than padding it out or restyling it.",
+      "files": [],
+      "expectations": [
+        "Does not expand a concise, template-conforming body",
+        "Updates only the sections whose content actually changed, if any"
+      ]
     }
   ]
 }

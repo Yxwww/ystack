@@ -1,0 +1,29 @@
+{
+  "skill_name": "pr-dogfood",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "check out example-org/sdk#1978 and tell me if it's good to land. I want to actually know what it does, not just whether the tests pass — and I'll need to explain it to my PM afterward, so give me something readable.",
+      "expected_output": "Phase 1 prose explaining the additive-per-geometry design in plain words before any findings; a code-review run whose output lands in pr-review/1978/axes/; a dogfood pass that runs the example in a browser (not just reads the code) with screenshots saved to evidence/ and at least one numeric before/after; dogfood/*.md in the house header-block format; explainer.html as a single self-contained file; a chat answer that leads with 'what it is' and 'does it work' rather than a file listing.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "the branch feat/SDK-612-scroll-anchor has a change I don't understand. Read it, review it properly, run it so you know it actually works, and write me an html page that explains it.",
+      "expected_output": "Recognises no PR number exists and writes to pr-review/<branch-slug>/ rather than inventing a PR number; runs code-review's axes; dogfoods by starting the dev server and driving it rather than reasoning from the diff; produces explainer.html which names the head SHA and states what could not be run; README.md written last as an index with links, not a duplicate of the findings.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "we just merged a big refactor and I want to know whether the docs still match. Also there's a PR open at example-org/app-framework#217 that I need reviewed.",
+      "expected_output": "Splits the request: the docs question is not a PR dogfood and should not trigger the full four-phase loop; #217 is and should. Does not produce axes/ or explainer.html for the merged refactor. Asks or states which one it is doing rather than silently doing both.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "the build output for the new stacked-maps extension is in node_modules/.cache, can you tell me why the bundle grew 40kb?",
+      "expected_output": "Does NOT trigger pr-dogfood. This is bundle analysis, not a PR review; no PR or branch is named and no review/explain artifact is wanted.",
+      "files": []
+    }
+  ]
+}
