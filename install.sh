@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ystack — the one entry point for a new machine.
 #
-#   1. link this repo's skills into ~/.agents/skills
+#   1. link this repo's skills into every agent config home (~/.agents, ~/.claude, ~/.pi/agent)
 #   2. restore skills-CLI skills tracked in ~/.agents/.skill-lock.json
-#   3. doctor — verify every declared skill resolves
+#   3. doctor — verify every declared skill resolves in every installed target
 #
 # Runnable from anywhere; resolves its own directory.
 
@@ -20,7 +20,7 @@ fi
 echo "==> ystack @ $ROOT"
 
 echo
-echo "==> 1/3 link skills into ~/.agents/skills"
+echo "==> 1/3 link skills into every agent config home"
 node "$INSTALL" link
 
 echo
