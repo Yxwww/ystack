@@ -16,7 +16,7 @@ Clone it anywhere and `./install.sh` works.
 
 | Origin | What it means | Restored by |
 |---|---|---|
-| **dotfiles** | Authored *here*, under `skills/`. | `install.sh` → `install.mjs link` symlinks each into `~/.agents/skills/` |
+| **dotfiles** | Authored *here*, under `skills/`. | `install.sh` → `install.mjs link` symlinks each into **every** agent config home |
 | **skills-cli** | Installed by `npx skills add <repo> -g`, tracked in `~/.agents/.skill-lock.json`. **Never copied into this repo.** | `install.mjs skills-cli` re-adds missing ones from the lockfile |
 | **cli-installer** | Generated stubs from a CLI you installed (`agent-browser`, `rex`). | Re-run the tool (`agent-browser skills install`, `rex skill setup`) — never commit a copy, the tool rewrites it on upgrade |
 | **excluded** | Belongs to another, domain-specific stack | Not installed here at all |
@@ -34,11 +34,27 @@ Requires **Node** (>= 18) and **git**.
 ./install.sh
 ```
 
-One entry point, three steps: link this repo's skills into `~/.agents/skills`,
+One entry point, three steps: link this repo's skills into every agent config home,
 restore missing skills-CLI skills, then `doctor`. It resolves its own directory, so
 it runs from anywhere. Exits non-zero if any declared skill fails to resolve.
 
-`AGENT_SKILLS_DIR` overrides the target directory (the tests use a tmpdir).
+### Which directories get the links
+
+An agent only loads skills from **its own** config directory, so a link only in
+`~/.agents/skills/` is invisible to some agents. `link` fans out to all of:
+
+| Target | Default dir | Override |
+|---|---|---|
+| `agents` | `~/.agents/skills/` | `AGENTS_HOME` |
+| `claude` | `~/.claude/skills/` | `CLAUDE_CONFIG_DIR` |
+| `pi` | `~/.pi/agent/skills/` | `PI_CODING_AGENT_DIR` |
+
+No path is hardcoded — each default is overridable by that agent's own variable, which
+is also how the tests point at a sandbox. An agent that isn't installed is skipped by
+`link` and reported by `doctor` rather than getting a directory invented for it.
+
+`AGENT_SKILLS_DIR` collapses the target set to a single directory (tests).
+`AGENT_SKILLS_TARGETS=claude,pi` restricts it by id.
 
 ## Subcommands
 
@@ -54,7 +70,7 @@ it runs from anywhere. Exits non-zero if any declared skill fails to resolve.
 `check` is the safe read-only inspection — it lists each dotfiles skill's actual
 state (`ok`, `missing`, `dir`, `foreign-link`) without touching anything.
 
-Tests: `node --test "scripts/*.test.mjs"` (11 cases, no fixtures outside a tmpdir).
+Tests: `node --test "scripts/*.test.mjs"` (16 cases, no fixtures outside a tmpdir).
 
 ## `code-review` shadows `mattpocock/skills`
 

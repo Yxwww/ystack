@@ -6,9 +6,34 @@ separate stacks, pinned to a product; this one is not.
 **A skill has exactly one origin. ystack never copies what another tool owns.**
 This file is the machine-readable source of truth — `install.mjs` parses it.
 
+## Link targets
+
+An agent only loads skills from **its own** config directory. ystack therefore links
+each `origin: dotfiles` skill into all of them, not just `~/.agents/skills/`.
+
+| Target | Default dir | Override |
+|---|---|---|
+| `agents` | `~/.agents/skills/` | `AGENTS_HOME` |
+| `claude` | `$CLAUDE_CONFIG_DIR/skills/` | `CLAUDE_CONFIG_DIR` |
+| `pi` | `$PI_CODING_AGENT_DIR/skills/` (`~/.pi/agent`) | `PI_CODING_AGENT_DIR` |
+
+No path is hardcoded: each row's home is resolved from the variable, falling back to
+the default. `pi` also reads `~/.agents/skills/` natively; Claude Code does not, which
+is why the fan-out exists.
+
+- **Absent target** (agent not installed) — `link` skips it and does not create the
+directory; `doctor` reports `@<id>: agent not installed`.
+- **Real directory at a target** — `link` refuses to replace it (`SKIP`), because the
+skills CLI or a manual install owns it. `doctor` reports which agent is shadowed.
+- **Chained link** — a target link resolving through another target to this repo counts
+as `ok`; comparison is by `realpath`, not by literal link text.
+
+`AGENT_SKILLS_DIR` collapses the whole set to one directory (used by the tests).
+`AGENT_SKILLS_TARGETS=claude,pi` restricts the set by id.
+
 ## `origin: dotfiles`
 
-Authored here, under `skills/`. Restore = symlink into `~/.agents/skills/`.
+Authored here, under `skills/`. Restore = symlink into **every** agent config home.
 `install.mjs link` owns that loop; `install.sh` is the one entry point.
 
 | Skill | Purpose |
@@ -18,7 +43,9 @@ Authored here, under `skills/`. Restore = symlink into `~/.agents/skills/`.
 | `pr-catchup` | invoke-only `/pr-catchup` status brief for resuming a PR |
 | `ship` | simplify → review-fix rounds → commit → push. Runs under `/tmp/pi-ship-active`; that path **must** match the extension |
 | `simplify` | cleanup-only review: reuse, simplification, efficiency, altitude |
-| `code-review` | three-axis review: Standards / Spec / Perf. The Perf axis delegates to its `references/perf-systems.md` for a five-axis systems pass (memory, layout, cpu, gpu, io). **Shadows** the `skills` CLI copy from `mattpocock/skills` |
+| `code-review` | multi-axis review: Standards / Spec / Perf / Placement. Each axis writes its own report file under `<repo>/pr-review/<n>/axes/`; the coordinator writes the `README.md` index. The Perf axis delegates to its `references/perf-systems.md` for a five-axis systems pass (memory, layout, cpu, gpu, io). **Shadows** the `skills` CLI copy from `mattpocock/skills` |
+| `placement-review` | plan or diff: fold each new unit (loop, state, layer, test) into its existing home. Plan mode is nudged by the `ExitPlanMode` hook; review mode is `code-review`'s Placement axis |
+| `pr-dogfood` | a whole PR, end to end: learn it, run `code-review`, dogfood it live with screenshots, then write the record — house-format `.md` per subject plus a single-file `explainer.html` |
 | `flaky-ci` | CI-vs-local flake diagnosis; bounded local repro, then instrument CI |
 ### Shadows
 
@@ -58,6 +85,9 @@ silent otherwise (the link dangles and the skill just stops loading).
 | `agent-browser` | `brew install agent-browser` | `agent-browser skills install` |
 | `rex` | Rex app (`com.superlogical.rex`) | `rex skill setup` |
 | `skill-creator` | Claude Code plugin: `claude plugin install skill-creator@claude-plugins-official` | `ln -snf ~/.claude/plugins/cache/claude-plugins-official/skill-creator/*/skills/skill-creator ~/.agents/skills/skill-creator` |
+
+cli-installer skills are checked against the **first** target (`agents`); they are
+not fanned out, because each one is a stub pointing at its own tool's cache.
 
 All three stubs say so themselves: `agent-browser` points at `agent-browser skills get core`,
 `rex` at `rex __internal skill`. Backing any of them up would freeze a stale pointer.

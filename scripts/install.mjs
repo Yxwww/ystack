@@ -10,7 +10,13 @@
 //   check      report state, mutate nothing
 //   doctor     verify every declared skill resolves; non-zero exit on drift
 //
-// AGENT_SKILLS_DIR overrides the target (tests use a tmpdir).
+// Skills are linked into EVERY agent's config home, not only ~/.agents: an agent
+// only loads what its own config directory contains (pi also reads ~/.agents/skills
+// natively; Claude Code does not). Each home is resolved at runtime from that
+// agent's documented override variable, so no machine layout is hardcoded here.
+//
+// AGENT_SKILLS_DIR    collapses the whole target set to one directory (tests).
+// AGENT_SKILLS_TARGETS comma-separated agent ids to restrict the set to.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -132,12 +138,41 @@ function readManifest() {
   return parseManifest(readFileSync(MANIFEST, "utf-8"));
 }
 
-function skillsDir() {
-  return process.env.AGENT_SKILLS_DIR ?? join(homedir(), ".agents", "skills");
+// `skills` sits under each agent's config home, so only the home varies per agent.
+export const KNOWN_TARGETS = [
+  { id: "agents", home: () => process.env.AGENTS_HOME || join(homedir(), ".agents") },
+  { id: "claude", home: () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude") },
+  { id: "pi", home: () => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent") },
+];
+
+/**
+ * The skills directories ystack links into.
+ *
+ * Returns one entry per declared target with `exists` telling the caller whether
+ * that agent is installed. Whether an absent target is skipped (link) or reported
+ * (doctor) is policy, so resolution always returns all of them — it never silently
+ * drops a target the caller asked about.
+ */
+export function targets() {
+  if (process.env.AGENT_SKILLS_DIR) {
+    const dir = process.env.AGENT_SKILLS_DIR;
+    return [{ id: "agents", dir, exists: true, explicit: true }];
+  }
+  const only = (process.env.AGENT_SKILLS_TARGETS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return KNOWN_TARGETS.filter((t) => only.length === 0 || only.includes(t.id)).map((t) => {
+    const dir = join(t.home(), "skills");
+    return { id: t.id, dir, exists: existsSync(dir), explicit: false };
+  });
 }
 
-function inspect(name) {
-  const link = join(skillsDir(), name);
+// First resolved target. Only used as a default for callers that predate the
+// multi-target split (cli-installer inspection), which are single-dir by nature.
+function skillsDir() {
+  return targets()[0]?.dir ?? join(homedir(), ".agents", "skills");
+}
+
+function inspect(name, dir = skillsDir()) {
+  const link = join(dir, name);
   const src = join(SKILLS, name);
   let st;
   try {
@@ -147,7 +182,17 @@ function inspect(name) {
   }
   if (st.isSymbolicLink()) {
     const dest = resolve(dirname(link), readlinkSync(link));
-    return { name, link, src, kind: dest === src ? "ok" : "foreign-link", dest };
+    // Resolve both sides: an existing install has links chaining through another
+    // target (~/.claude/skills/x -> ~/.agents/skills/x -> this repo). That is a
+    // valid layout, not a foreign link, so compare where they *end up*.
+    const lands = (p) => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return resolve(p);
+      }
+    };
+    return { name, link, src, kind: lands(dest) === lands(src) ? "ok" : "foreign-link", dest };
   }
   return { name, link, src, kind: "dir" };
 }
@@ -195,15 +240,22 @@ function resolvedPath(p) {
 
 function cmdCheck({ quiet = false } = {}) {
   const m = readManifest();
-  const rows = m.dotfiles.map(inspect);
+  const dirs = targets();
+  const live = dirs.filter((d) => d.exists || d.explicit);
   let drift = 0;
-  if (!quiet) console.log(`ystack @ ${ROOT}\n`);
-  for (const r of rows) {
-    const bad = r.kind !== "ok";
-    if (bad) drift++;
-    if (quiet && !bad) continue;
-    const col = r.kind === "ok" ? C.ok : C.warn;
-    console.log(`  ${col}${r.kind.padEnd(12)}${C.off} ${r.name}${bad ? `  ${C.dim}${r.link}${C.off}` : ""}`);
+  if (!quiet) {
+    const byId = dirs.map((d) => `${d.id}${d.exists || d.explicit ? "" : " (absent)"}`).join(", ");
+    console.log(`ystack @ ${ROOT}\n  targets: ${byId}\n`);
+  }
+  for (const name of m.dotfiles) {
+    for (const d of live) {
+      const r = inspect(name, d.dir);
+      const bad = r.kind !== "ok";
+      if (bad) drift++;
+      if (quiet && !bad) continue;
+      const col = r.kind === "ok" ? C.ok : C.warn;
+      console.log(`  ${col}${r.kind.padEnd(12)}${C.off} ${name} ${C.dim}[${d.id}]${bad ? `  ${r.link}` : ""}${C.off}`);
+    }
   }
   for (const name of m.cliInstaller) {
     const r = inspectOwned(name);
@@ -217,43 +269,52 @@ function cmdCheck({ quiet = false } = {}) {
       `  ${col}${label.padEnd(12)}${C.off} ${name} ${C.dim}(cli-installer — restored by its own tool)${C.off}`,
     );
   }
-  if (!quiet) console.log(`\n  ${rows.length} dotfiles · ${m.cliInstaller.length} cli-installer · ${m.parked.length} parked · ${m.excluded.length} excluded names`);
+  if (!quiet) console.log(`\n  ${m.dotfiles.length} dotfiles x ${live.length} target(s) · ${m.cliInstaller.length} cli-installer · ${m.parked.length} parked · ${m.excluded.length} excluded names`);
   return drift;
 }
 
 function cmdLink() {
   const m = readManifest();
-  mkdirSync(skillsDir(), { recursive: true });
+  const dirs = targets();
+  const live = dirs.filter((d) => d.exists || d.explicit);
   let linked = 0;
   let skipped = 0;
   for (const name of m.dotfiles) {
-    const r = inspect(name);
-    if (!existsSync(r.src)) {
-      console.error(`  ${C.bad}MISSING SRC${C.off} ${name} — declared in STACK.md but ${r.src} does not exist`);
+    const src = join(SKILLS, name);
+    if (!existsSync(src)) {
+      console.error(`  ${C.bad}MISSING SRC${C.off} ${name} — declared in STACK.md but ${src} does not exist`);
       process.exitCode = 1;
       continue;
     }
-    if (r.kind === "dir") {
-      // The skills CLI or a manual install owns this real directory. Do not
-      // clobber it — that loses whatever the other tool put there.
-      console.log(`  ${C.warn}SKIP${C.off}   ${name} — real directory exists (remove it to let ystack own this name)`);
-      skipped++;
-      continue;
-    }
-    if (r.kind === "foreign-link") {
-      // Stale link from an earlier layout. Never do this to a real directory.
-      unlinkSync(r.link);
-    }
-    if (r.kind !== "ok") {
-      symlinkSync(r.src, r.link, "dir");
-      console.log(`  ${C.ok}LINKED${C.off} ${name}`);
+    const done = [];
+    for (const d of live) {
+      const r = inspect(name, d.dir);
+      if (r.kind === "dir") {
+        // The skills CLI or a manual install owns this real directory. Do not
+        // clobber it — that loses whatever the other tool put there.
+        console.log(`  ${C.warn}SKIP${C.off}   ${name} ${C.dim}[${d.id}] — real directory exists (remove it to let ystack own this name)${C.off}`);
+        skipped++;
+        continue;
+      }
+      if (r.kind === "foreign-link") {
+        // Stale link from an earlier layout. Never do this to a real directory.
+        unlinkSync(r.link);
+      }
+      if (r.kind !== "ok") {
+        mkdirSync(d.dir, { recursive: true });
+        symlinkSync(src, r.link, "dir");
+      }
+      done.push(d.id);
       linked++;
-      continue;
     }
-    linked++;
+    if (done.length) console.log(`  ${C.ok}LINKED${C.off} ${name} ${C.dim}[${done.join(" ")}]${C.off}`);
   }
-  if (skipped) console.error(`\n  ${C.warn}${skipped} skill(s) skipped${C.off} — another tool owns the directory`);
-  else console.log(`\n  ${linked} linked`);
+  const absent = dirs.filter((d) => !d.exists && !d.explicit);
+  if (absent.length) {
+    console.log(`\n  ${C.dim}skipped targets (agent not installed): ${absent.map((d) => d.id).join(", ")}${C.off}`);
+  }
+  if (skipped) console.error(`  ${C.warn}${skipped} link(s) skipped${C.off} — another tool owns the directory`);
+  else console.log(`  ${linked} linked across ${live.length} target(s)`);
   return 0;
 }
 
@@ -264,7 +325,9 @@ function cmdSkillsCli() {
   }
   const lock = JSON.parse(readFileSync(LOCK, "utf-8"));
   const { dotfiles } = readManifest();
-  const installed = existsSync(skillsDir()) ? readdirSync(skillsDir()) : [];
+  // A skill restored into any one target counts as present; `link` fans out to the
+  // rest, and re-adding the package here would clobber the owned symlinks.
+  const installed = [...new Set(targets().filter((d) => d.exists).flatMap((d) => readdirSync(d.dir)))];
   const { sources, blocked } = planSkillsCli({ owned: dotfiles, installed, lock });
 
   for (const b of blocked) {
@@ -287,12 +350,23 @@ function cmdSkillsCli() {
 function cmdDoctor() {
   const m = readManifest();
   const problems = [];
+  const dirs = targets();
+  // An absent target means that agent is not installed here, which is not drift.
+  // An existing target missing the link is drift, and the message names which
+  // agent so the fix is obvious.
+  const live = dirs.filter((d) => d.exists || d.explicit);
+  for (const d of dirs) if (!d.exists && !d.explicit) problems.push(`@${d.id}: agent not installed (skipped: ${d.dir})`);
   for (const name of m.dotfiles) {
-    const r = inspect(name);
-    if (!existsSync(r.src)) problems.push(`${name}: source missing at ${r.src}`);
-    else if (r.kind === "dir") problems.push(`${name}: real directory shadows ystack (run: rm -rf ${r.link})`);
-    else if (r.kind === "missing") problems.push(`${name}: not linked (run: install.mjs link)`);
-    else if (r.kind === "foreign-link") problems.push(`${name}: links to ${r.dest}, not the stack`);
+    if (!existsSync(join(SKILLS, name))) {
+      problems.push(`${name}: source missing at ${join(SKILLS, name)}`);
+      continue;
+    }
+    for (const d of live) {
+      const r = inspect(name, d.dir);
+      if (r.kind === "dir") problems.push(`${name} [${d.id}]: real directory shadows ystack (run: rm -rf ${r.link})`);
+      else if (r.kind === "missing") problems.push(`${name} [${d.id}]: not linked (run: install.mjs link)`);
+      else if (r.kind === "foreign-link") problems.push(`${name} [${d.id}]: links to ${r.dest}, not the stack`);
+    }
   }
   // cli-installer skills are tool-owned, so ystack cannot restore them itself —
   // it only reports. A dangling link is loud because it fails silently at load.
@@ -305,7 +379,7 @@ function cmdDoctor() {
   }
   if (problems.length === 0) {
     console.log(
-      `  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles + ${m.cliInstaller.length} cli-installer skills resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`,
+      `  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles x ${live.length} target(s) (${live.map((d) => d.id).join(", ")}) + ${m.cliInstaller.length} cli-installer resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`,
     );
     return 0;
   }

@@ -4,9 +4,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readdirSync, readlinkSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseManifest, parseLock, planSkillsCli } from "./install.mjs";
 
@@ -23,6 +23,8 @@ test("parseManifest reads the real STACK.md", () => {
     "ship",
     "simplify",
     "code-review",
+    "placement-review",
+    "pr-dogfood",
     "flaky-ci",
   ]);
 
@@ -109,7 +111,17 @@ test("link creates one symlink per dotfiles skill, idempotently", () => {
   try {
     s.run("link");
     const linked = readdirSync(s.skills).sort();
-    assert.deepEqual(linked, ["code-review", "flaky-ci", "pr-catchup", "pre-commit", "pre-push", "ship", "simplify"]);
+    assert.deepEqual(linked, [
+      "code-review",
+      "flaky-ci",
+      "placement-review",
+      "pr-catchup",
+      "pr-dogfood",
+      "pre-commit",
+      "pre-push",
+      "ship",
+      "simplify",
+    ]);
     // Second run must not fail on existing links.
     assert.doesNotThrow(() => s.run("link"));
     assert.deepEqual(readdirSync(s.skills).sort(), linked);
@@ -210,7 +222,136 @@ test("doctor flags a link that points outside the stack", () => {
       s.run("doctor");
       assert.fail("doctor should have failed");
     } catch (e) {
-      assert.match(String(e.stderr), /flaky-ci: links to .*impostor/);
+      assert.match(String(e.stderr), /flaky-ci \[agents\]: links to .*impostor/);
+    }
+  } finally {
+    s.done();
+  }
+});
+
+// `check` had no coverage, which let a stale variable survive a refactor and crash
+// on the very first real run. It is the safe read-only command, so it must always
+// produce a report — before and after linking, and non-zero only when dirty.
+test("check reports state without mutating anything", () => {
+  const s = multiSandbox();
+  try {
+    assert.throws(() => s.run("check"), /Command failed/);
+    // A dirty check must not have created any links.
+    assert.deepEqual(readdirSync(s.skills.pi), []);
+
+    s.run("link");
+    s.seedOwned();
+    const out = s.run("check");
+    assert.match(out, /targets: agents, claude, pi/);
+    assert.match(out, /ok\s+ship \[claude\]/);
+  } finally {
+    s.done();
+  }
+});
+
+// --- multi-agent targets: ystack must link into every agent config home -------
+
+// Sandbox with separate homes for each agent, so `targets()` resolves from the
+// override vars rather than from this machine's real directories.
+function multiSandbox({ only = null } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ystack-multi-"));
+  const homes = { agents: join(root, "agents"), claude: join(root, "claude"), pi: join(root, "pi") };
+  for (const h of Object.values(homes)) mkdirSync(h, { recursive: true });
+  const skills = Object.fromEntries(Object.entries(homes).map(([k, h]) => [k, join(h, "skills")]));
+  // `only` simulates an agent that is not installed: its skills dir never exists.
+  for (const [k, d] of Object.entries(skills)) if (k !== only) mkdirSync(d, { recursive: true });
+  const env = {
+    ...process.env,
+    AGENTS_HOME: homes.agents,
+    CLAUDE_CONFIG_DIR: homes.claude,
+    PI_CODING_AGENT_DIR: homes.pi,
+    AGENT_SKILLS_DIR: "",
+    AGENT_SKILLS_TARGETS: "",
+  };
+  const run = (cmd) =>
+    execFileSync("node", [join(import.meta.dirname, "install.mjs"), cmd], { env, encoding: "utf-8", stdio: "pipe" });
+  const seedOwned = () => {
+    for (const name of ["agent-browser", "rex", "skill-creator"]) {
+      const src = join(root, "owned", name);
+      mkdirSync(src, { recursive: true });
+      writeFileSync(join(src, "SKILL.md"), name);
+      symlinkSync(src, join(skills.agents, name), "dir");
+    }
+  };
+  return { root, homes, skills, run, seedOwned, done: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+// The reason this exists: pi loads ~/.agents/skills natively, but Claude Code
+// only loads its own config dir, so a single-target link silently made ystack's
+// skills invisible to one of the two agents.
+test("link fans out to every agent config home", () => {
+  const s = multiSandbox();
+  try {
+    s.run("link");
+    const expected = [
+      "code-review",
+      "flaky-ci",
+      "placement-review",
+      "pr-catchup",
+      "pr-dogfood",
+      "pre-commit",
+      "pre-push",
+      "ship",
+      "simplify",
+    ];
+    for (const [id, dir] of Object.entries(s.skills)) {
+      assert.deepEqual(readdirSync(dir).sort(), expected, `${id} target missing links`);
+    }
+    // Each link resolves back to this repo's own skills/ dir.
+    for (const id of Object.keys(s.skills)) {
+      const link = join(s.skills[id], "ship");
+      assert.equal(resolve(dirname(link), readlinkSync(link)), join(import.meta.dirname, "..", "skills", "ship"));
+    }
+    s.seedOwned();
+    assert.doesNotThrow(() => s.run("doctor"));
+  } finally {
+    s.done();
+  }
+});
+
+// An agent that is not installed must not be created by `link`, but doctor has to
+// say so — otherwise a re-install of that agent silently leaves it skill-less.
+test("link skips an absent agent, doctor reports it", () => {
+  const s = multiSandbox({ only: "claude" });
+  try {
+    assert.ok(!existsSync(s.skills.claude), "precondition: claude not installed");
+    s.run("link");
+    assert.ok(!existsSync(s.skills.claude), "link must not create a home for an absent agent");
+    assert.ok(existsSync(join(s.skills.pi, "ship")));
+
+    s.seedOwned();
+    try {
+      s.run("doctor");
+      assert.fail("doctor should flag the absent agent");
+    } catch (e) {
+      assert.match(String(e.stderr), /@claude: agent not installed/);
+    }
+  } finally {
+    s.done();
+  }
+});
+
+// One target holding a stale real directory must not stop the others updating.
+test("a real directory in one target does not block the others", () => {
+  const s = multiSandbox();
+  try {
+    mkdirSync(join(s.skills.claude, "ship"));
+    writeFileSync(join(s.skills.claude, "ship", "SKILL.md"), "stale copy");
+    s.run("link");
+    // The stale copy is preserved...
+    assert.equal(readFileSync(join(s.skills.claude, "ship", "SKILL.md"), "utf-8"), "stale copy");
+    // ...and doctor calls it out by agent id, not just by name.
+    s.seedOwned();
+    try {
+      s.run("doctor");
+      assert.fail("doctor should flag the shadowing directory");
+    } catch (e) {
+      assert.match(String(e.stderr), /ship \[claude\]: real directory shadows ystack/);
     }
   } finally {
     s.done();
