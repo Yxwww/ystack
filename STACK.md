@@ -22,7 +22,7 @@ the default. `pi` also reads `~/.agents/skills/` natively; Claude Code does not,
 is why the fan-out exists.
 
 - **Absent target** (agent not installed) — `link` skips it and does not create the
-directory; `doctor` reports `@<id>: agent not installed`.
+directory; `doctor` notes it as absent on stdout but does not treat it as drift.
 - **Real directory at a target** — `link` refuses to replace it (`SKIP`), because the
 skills CLI or a manual install owns it. `doctor` reports which agent is shadowed.
 - **Chained link** — a target link resolving through another target to this repo counts
@@ -86,7 +86,8 @@ silent otherwise (the link dangles and the skill just stops loading).
 | `rex` | Rex app (`com.superlogical.rex`) | `rex skill setup` |
 | `skill-creator` | Claude Code plugin: `claude plugin install skill-creator@claude-plugins-official` | `ln -snf ~/.claude/plugins/cache/claude-plugins-official/skill-creator/*/skills/skill-creator ~/.agents/skills/skill-creator` |
 
-cli-installer skills are checked against the **first** target (`agents`); they are
+cli-installer skills are checked against the `agents` target regardless of
+`AGENT_SKILLS_TARGETS` (`AGENT_SKILLS_DIR` still overrides it); they are
 not fanned out, because each one is a stub pointing at its own tool's cache.
 
 All three stubs say so themselves: `agent-browser` points at `agent-browser skills get core`,

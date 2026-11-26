@@ -39,8 +39,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const MANIFEST = join(ROOT, "STACK.md");
 const SKILLS = join(ROOT, "skills");
-// Where the `skills` CLI writes its manifest. Not a file in this repo.
-const LOCK = join(homedir(), ".agents", ".skill-lock.json");
 
 /**
  * Parse the title of every `## ` section in STACK.md, returning
@@ -138,9 +136,11 @@ function readManifest() {
   return parseManifest(readFileSync(MANIFEST, "utf-8"));
 }
 
+const agentsHome = () => process.env.AGENTS_HOME || join(homedir(), ".agents");
+
 // `skills` sits under each agent's config home, so only the home varies per agent.
 export const KNOWN_TARGETS = [
-  { id: "agents", home: () => process.env.AGENTS_HOME || join(homedir(), ".agents") },
+  { id: "agents", home: agentsHome },
   { id: "claude", home: () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude") },
   { id: "pi", home: () => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent") },
 ];
@@ -148,27 +148,34 @@ export const KNOWN_TARGETS = [
 /**
  * The skills directories ystack links into.
  *
- * Returns one entry per declared target with `exists` telling the caller whether
- * that agent is installed. Whether an absent target is skipped (link) or reported
- * (doctor) is policy, so resolution always returns all of them — it never silently
- * drops a target the caller asked about.
+ * Returns one entry per declared target with `live` telling the caller whether to
+ * touch it: an explicit AGENT_SKILLS_DIR is live even before it exists (link creates
+ * it), while an agent that is not installed is not live and is skipped. Readers of
+ * directory *contents* must still guard with existsSync.
  */
 export function targets() {
   if (process.env.AGENT_SKILLS_DIR) {
     const dir = process.env.AGENT_SKILLS_DIR;
-    return [{ id: "agents", dir, exists: true, explicit: true }];
+    return [{ id: "agents", dir, live: true }];
   }
   const only = (process.env.AGENT_SKILLS_TARGETS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   return KNOWN_TARGETS.filter((t) => only.length === 0 || only.includes(t.id)).map((t) => {
     const dir = join(t.home(), "skills");
-    return { id: t.id, dir, exists: existsSync(dir), explicit: false };
+    return { id: t.id, dir, live: existsSync(dir) };
   });
 }
 
-// First resolved target. Only used as a default for callers that predate the
-// multi-target split (cli-installer inspection), which are single-dir by nature.
+// Where the `skills` CLI writes its manifest. Resolved lazily so tests can point
+// AGENTS_HOME at a temp dir per run. Not a file in this repo.
+function lockPath() {
+  return join(agentsHome(), ".skill-lock.json");
+}
+
+// cli-installer inspection is single-dir by nature: always the agents target,
+// independent of AGENT_SKILLS_TARGETS. AGENT_SKILLS_DIR still wins.
 function skillsDir() {
-  return targets()[0]?.dir ?? join(homedir(), ".agents", "skills");
+  if (process.env.AGENT_SKILLS_DIR) return process.env.AGENT_SKILLS_DIR;
+  return join(agentsHome(), "skills");
 }
 
 function inspect(name, dir = skillsDir()) {
@@ -241,10 +248,10 @@ function resolvedPath(p) {
 function cmdCheck({ quiet = false } = {}) {
   const m = readManifest();
   const dirs = targets();
-  const live = dirs.filter((d) => d.exists || d.explicit);
+  const live = dirs.filter((d) => d.live);
   let drift = 0;
   if (!quiet) {
-    const byId = dirs.map((d) => `${d.id}${d.exists || d.explicit ? "" : " (absent)"}`).join(", ");
+    const byId = dirs.map((d) => `${d.id}${d.live ? "" : " (absent)"}`).join(", ");
     console.log(`ystack @ ${ROOT}\n  targets: ${byId}\n`);
   }
   for (const name of m.dotfiles) {
@@ -276,7 +283,7 @@ function cmdCheck({ quiet = false } = {}) {
 function cmdLink() {
   const m = readManifest();
   const dirs = targets();
-  const live = dirs.filter((d) => d.exists || d.explicit);
+  const live = dirs.filter((d) => d.live);
   let linked = 0;
   let skipped = 0;
   for (const name of m.dotfiles) {
@@ -309,7 +316,7 @@ function cmdLink() {
     }
     if (done.length) console.log(`  ${C.ok}LINKED${C.off} ${name} ${C.dim}[${done.join(" ")}]${C.off}`);
   }
-  const absent = dirs.filter((d) => !d.exists && !d.explicit);
+  const absent = dirs.filter((d) => !d.live);
   if (absent.length) {
     console.log(`\n  ${C.dim}skipped targets (agent not installed): ${absent.map((d) => d.id).join(", ")}${C.off}`);
   }
@@ -319,15 +326,17 @@ function cmdLink() {
 }
 
 function cmdSkillsCli() {
-  if (!existsSync(LOCK)) {
-    console.error(`missing lockfile: ${LOCK}`);
+  const lockFile = lockPath();
+  if (!existsSync(lockFile)) {
+    console.error(`missing lockfile: ${lockFile}`);
     return 1;
   }
-  const lock = JSON.parse(readFileSync(LOCK, "utf-8"));
+  const lock = JSON.parse(readFileSync(lockFile, "utf-8"));
   const { dotfiles } = readManifest();
   // A skill restored into any one target counts as present; `link` fans out to the
-  // rest, and re-adding the package here would clobber the owned symlinks.
-  const installed = [...new Set(targets().filter((d) => d.exists).flatMap((d) => readdirSync(d.dir)))];
+  // rest, and re-adding the package here would clobber the owned symlinks. Guard
+  // with existsSync: an explicit AGENT_SKILLS_DIR is live before it exists.
+  const installed = [...new Set(targets().filter((d) => existsSync(d.dir)).flatMap((d) => readdirSync(d.dir)))];
   const { sources, blocked } = planSkillsCli({ owned: dotfiles, installed, lock });
 
   for (const b of blocked) {
@@ -352,10 +361,12 @@ function cmdDoctor() {
   const problems = [];
   const dirs = targets();
   // An absent target means that agent is not installed here, which is not drift.
-  // An existing target missing the link is drift, and the message names which
-  // agent so the fix is obvious.
-  const live = dirs.filter((d) => d.exists || d.explicit);
-  for (const d of dirs) if (!d.exists && !d.explicit) problems.push(`@${d.id}: agent not installed (skipped: ${d.dir})`);
+  // Say so on stdout; only a live target missing its link is drift.
+  const live = dirs.filter((d) => d.live);
+  const absent = dirs.filter((d) => !d.live);
+  const absentLine = absent.length
+    ? `  ${C.dim}absent (agent not installed, not drift): ${absent.map((d) => d.id).join(", ")}${C.off}`
+    : null;
   for (const name of m.dotfiles) {
     if (!existsSync(join(SKILLS, name))) {
       problems.push(`${name}: source missing at ${join(SKILLS, name)}`);
@@ -381,9 +392,11 @@ function cmdDoctor() {
     console.log(
       `  ${C.ok}ok${C.off} — ${m.dotfiles.length} dotfiles x ${live.length} target(s) (${live.map((d) => d.id).join(", ")}) + ${m.cliInstaller.length} cli-installer resolve, ${m.parked.length} parked, ${m.excluded.length} excluded`,
     );
+    if (absentLine) console.log(absentLine);
     return 0;
   }
   for (const p of problems) console.error(`  ${C.bad}drift${C.off} ${p}`);
+  if (absentLine) console.log(absentLine);
   return 1;
 }
 

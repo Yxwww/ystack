@@ -168,12 +168,10 @@ test("doctor flags a dangling cli-installer link", () => {
 
     // Plugin upgrade moves the cache dir out from under the link.
     rmSync(join(s.root, "owned", "skill-creator"), { recursive: true, force: true });
-    try {
-      s.run("doctor");
-      assert.fail("doctor should have failed on a dangling link");
-    } catch (e) {
-      assert.match(String(e.stderr), /skill-creator: dangling link/);
-    }
+    assert.throws(
+      () => s.run("doctor"),
+      (e) => /skill-creator: dangling link/.test(String(e.stderr)),
+    );
   } finally {
     s.done();
   }
@@ -185,12 +183,10 @@ test("doctor flags an absent cli-installer skill", () => {
     s.run("link");
     s.seedOwned();
     rmSync(join(s.skills, "rex"), { force: true });
-    try {
-      s.run("doctor");
-      assert.fail("doctor should have failed");
-    } catch (e) {
-      assert.match(String(e.stderr), /rex: not installed/);
-    }
+    assert.throws(
+      () => s.run("doctor"),
+      (e) => /rex: not installed/.test(String(e.stderr)),
+    );
   } finally {
     s.done();
   }
@@ -218,12 +214,10 @@ test("doctor flags a link that points outside the stack", () => {
     mkdirSync(other);
     rmSync(join(s.skills, "flaky-ci"), { force: true });
     symlinkSync(other, join(s.skills, "flaky-ci"), "dir");
-    try {
-      s.run("doctor");
-      assert.fail("doctor should have failed");
-    } catch (e) {
-      assert.match(String(e.stderr), /flaky-ci \[agents\]: links to .*impostor/);
-    }
+    assert.throws(
+      () => s.run("doctor"),
+      (e) => /flaky-ci \[agents\]: links to .*impostor/.test(String(e.stderr)),
+    );
   } finally {
     s.done();
   }
@@ -314,8 +308,9 @@ test("link fans out to every agent config home", () => {
   }
 });
 
-// An agent that is not installed must not be created by `link`, but doctor has to
-// say so — otherwise a re-install of that agent silently leaves it skill-less.
+// An agent that is not installed must not be created by `link`, and doctor must
+// mention it without calling it drift — otherwise a re-install of that agent
+// silently leaves it skill-less, but a machine without pi exits non-zero.
 test("link skips an absent agent, doctor reports it", () => {
   const s = multiSandbox({ only: "claude" });
   try {
@@ -325,12 +320,8 @@ test("link skips an absent agent, doctor reports it", () => {
     assert.ok(existsSync(join(s.skills.pi, "ship")));
 
     s.seedOwned();
-    try {
-      s.run("doctor");
-      assert.fail("doctor should flag the absent agent");
-    } catch (e) {
-      assert.match(String(e.stderr), /@claude: agent not installed/);
-    }
+    const out = s.run("doctor");
+    assert.match(out, /absent \(agent not installed, not drift\): claude/);
   } finally {
     s.done();
   }
@@ -347,18 +338,35 @@ test("a real directory in one target does not block the others", () => {
     assert.equal(readFileSync(join(s.skills.claude, "ship", "SKILL.md"), "utf-8"), "stale copy");
     // ...and doctor calls it out by agent id, not just by name.
     s.seedOwned();
-    try {
-      s.run("doctor");
-      assert.fail("doctor should flag the shadowing directory");
-    } catch (e) {
-      assert.match(String(e.stderr), /ship \[claude\]: real directory shadows ystack/);
-    }
+    assert.throws(
+      () => s.run("doctor"),
+      (e) => /ship \[claude\]: real directory shadows ystack/.test(String(e.stderr)),
+    );
   } finally {
     s.done();
   }
 });
 
 // --- skills-cli: never install a package that would overwrite an owned name ---
+
+// An explicit target is live before link creates it, so skills-cli used to readdir
+// a path that does not exist and die with ENOENT. An empty lock means no npx runs.
+test("skills-cli tolerates a missing explicit target dir", () => {
+  const root = mkdtempSync(join(tmpdir(), "ystack-cli-"));
+  const missing = join(root, "does-not-exist");
+  try {
+    writeFileSync(join(root, ".skill-lock.json"), JSON.stringify({ skills: {} }));
+    const out = execFileSync("node", [join(import.meta.dirname, "install.mjs"), "skills-cli"], {
+      env: { ...process.env, AGENTS_HOME: root, AGENT_SKILLS_DIR: missing, AGENT_SKILLS_TARGETS: "" },
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    assert.match(out, /all skills-CLI skills present/);
+    assert.ok(!existsSync(missing), "skills-cli must not create the target dir");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("planSkillsCli flags a source whose package contains an owned skill", () => {
   // `code-review` ships inside mattpocock/skills, so restoring any other skill

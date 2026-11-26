@@ -70,7 +70,7 @@ is also how the tests point at a sandbox. An agent that isn't installed is skipp
 `check` is the safe read-only inspection — it lists each dotfiles skill's actual
 state (`ok`, `missing`, `dir`, `foreign-link`) without touching anything.
 
-Tests: `node --test "scripts/*.test.mjs"` (16 cases, no fixtures outside a tmpdir).
+Tests: `node --test "scripts/*.test.mjs"` (18 cases, no fixtures outside a tmpdir).
 
 ## `code-review` shadows `mattpocock/skills`
 
